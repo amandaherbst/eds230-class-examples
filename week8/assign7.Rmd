@@ -1,0 +1,148 @@
+---
+title: "Assignment 7: Adding hunting to predator-prey model"
+author: "Amanda Herbst"
+date: "2024-05-21"
+---
+
+```{r, message = FALSE}
+library(tidyverse)
+library(deSolve)
+library(sensitivity)
+library(here)
+library(ggpubr)
+```
+
+# Assignment
+
+Consider how you might add hunting of prey to the predator prey model that we've been using in class
+
+##Part 1:
+
+Build this model (e.g add hunting to the lotvmodK.R),
+
+Some requirements/hints for your model
+
+You should make sure that you don't hunt more prey than exist.
+
+To ensure that you might also add a minimum prey population input that must be met before hunting is allowed.
+
+Note you can make this as simple or as complex as you would like. You could represent hunting in a way that is similar to "harvesting" in the last assignment.
+
+```{r}
+source(here::here("week8", "lotvmodHunt.R"))
+lotvmodHunt
+```
+
+**Testing function**
+
+```{r}
+# initial conditions
+currpop <- c(prey=20, pred=2)
+
+# set parameter list
+pars <- c(rprey=0.95, alpha=0.01, eff=0.4, pmort=0.4, K=2000, min_prey = 15, rhunt = 0.3)
+
+# times when you want to evaluate
+days <- seq(from=1,to=500)
+
+# run our differential equation solver
+res <- ode(func=lotvmodHunt, y=currpop, times=days, parms=pars)
+
+# rearrange for plotting
+resl <- as.data.frame(res) %>% pivot_longer(-time, names_to="species", values_to="pop")
+
+# graph both populations over time
+p1 <- ggplot(resl, aes(time, pop, col=species)) +
+  geom_line() +
+  theme_bw()
+p1
+
+# also look at relationships between preditor and prey population and use color for time 
+# I will remove the legend here to make it easier to see 
+p2 <- ggplot(as.data.frame(res), aes(pred, prey, col=as.factor(round(time/10)))) +
+  geom_point() +
+  theme_bw() +
+  theme(legend.position = "none")
+  
+p2
+ggarrange(p1,p2)
+```
+
+##Part 2
+
+Explore how different hunting levels and different minimum prey populations (before hunting is allowed) are likely to effect the stability of the populations of both predator and prey. A key challenge is how you might want to define stability? It is up to you but you will need to write a sentence to explain why you chose the measure that you did. It could be something as simple as maintaining a population above some value 50 years into the future.
+
+*when the slopes of prey and predator are 0, aka stable*
+
+Use this exploration to recommend a hunting target that will be sustainable (e.g leave you with a stable prey and predator population).
+
+It is up to you how you "explore" hunting - you can simply try different values of the parameters in your hunting model or do it more formally by running your model across a range of values. You could think about parameter interactions
+
+You can assume the following are best guesses of key parameters
+
+rprey=0.95, alpha=0.01, eff=0.6,pmort=0.4, K=2000,
+
+```{r}
+pars <- data.frame(rprey=0.95, alpha=0.01, eff=0.4, pmort=0.4, K=2000, min_prey = 15, rhunt = 0.1)
+preyi = with(pars, pmort/(eff*alpha)) 
+predi = with(pars, rprey/alpha*(1-preyi/K) - (rhunt/alpha)) 
+```
+
+```{r sensitivity-analysis}
+np = 200
+rhunt1 = runif(min=0.01, max=0.3, n=np)
+rhunt2 = runif(min=0.01, max=0.3, n=np)
+
+X1 = data.frame(rhunt = rhunt1)
+X2 = data.frame(rhunt = rhunt2)
+
+# create our sobel object and get sets ofparameters for running the model
+sens_PP = sobolSalt(model = NULL,X1, X2, nboot = 300)
+
+# name parameter sets...
+colnames(sens_PP$X) = c("rhunt")
+
+p_wrapper = function(rprey,alpha, eff, pmort, K, min_prey, rhunt, currpop, days, func) {
+  parms = list(rprey=rprey, alpha=alpha, eff=eff, pmort=pmort, K=K, min_prey=min_prey, rhunt=rhunt)
+  result = ode(y=currpop, times=days, func=func, parms=parms, method = "ode45") 
+  colnames(result)=c("time","prey","pred")
+  
+  # get metrics
+  preyi = with(pars, pmort/(eff*alpha)) 
+  predi = with(pars, rprey/alpha*(1-preyi/K) - (rhunt/alpha)) 
+  
+  stable <- as.data.frame(result) %>% 
+    filter(pred == predi & prey == preyi)
+  
+  return(as.data.frame(stable$time))
+}
+
+# define our unchanging parameters
+rprey = 0.95
+alpha = 0.01
+eff = 0.4
+pmort = 0.4
+K = 2000
+min_prey = 15
+
+currpop=c(prey=20, pred=2)
+days = seq(from=1,to=500)
+
+allresults = as.data.frame(sens_PP$X) %>% pmap(p_wrapper, rprey,alpha, eff, pmort, K, min_prey, currpop=currpop, days=days, func=lotvmodHunt)
+
+# take results back to unlisted form
+allres = allresults %>% map_dfr(`[`,c("time"))
+
+# range of response across parameter uncertainty
+allresl = allres %>% gather(key="metric",value="pop")
+ggplot(allresl, aes(metric, pop))+geom_boxplot()
+
+```
+
+Submit the Rmarkdown that documents
+
+a)  your hunting model
+
+b)  your exploration (e.g how you tested different hunting levels and how you defined a stability metric)
+
+c)  provides you estimated sustainable hunting level.
